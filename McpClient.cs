@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
@@ -11,6 +10,7 @@ using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
 using Microsoft.SemanticKernel;
 using Microsoft.SemanticKernel.Plugins.Core;
+using System.ComponentModel;
 #pragma warning disable CS8625 // Cannot convert null literal to non-nullable reference type.
 #pragma warning disable CS8604 // Possible null reference argument.
 #pragma warning disable CS8601 // Possible null reference assignment.
@@ -295,35 +295,107 @@ namespace McpSemanticKernel
         public async Task InitializeAsync(CancellationToken cancellationToken = default)
         {
             ThrowIfDisposed();
-
-            var request = new
-            {
-                jsonrpc = "2.0",
-                id = GetNextId(),
-                method = "initialize",
-                @params = new
-                {
-                    protocolVersion = "0.1.0",
-                    name = "semantic-kernel-client",
-                    version = "1.0.0",
-                    capabilities = new
-                    {
-                        tools = new { }
-                    }
-                }
-            };
-
-            var response = await SendRequestAsync(request, cancellationToken);
             
-            // Send initialized notification
-            var notification = new
+            // Check if the process is still running
+            if (_process.HasExited)
             {
-                jsonrpc = "2.0",
-                method = "initialized"
-            };
+                int exitCode = _process.ExitCode;
+                string stderr = _process.StandardError.ReadToEnd();
+                throw new InvalidOperationException(
+                    $"MCP server process exited before initialization with code {exitCode}. Error output: {stderr}");
+            }
 
-            await SendNotificationAsync(notification, cancellationToken);
-            _initialized = true;
+            _logger?.LogInformation("Starting MCP initialization");
+            
+            try
+            {
+                // var request = new
+                // {
+                //     jsonrpc = "2.0",
+                //     id = GetNextId(),
+                //     method = "initialize",
+                //     @params = new
+                //     {
+                //         protocolVersion = "0.1.0",
+                //         name = "semantic-kernel-client",
+                //         version = "1.0.0",
+                //         capabilities = new
+                //         {
+                //             tools = new { }
+                //         }
+                //     }
+                // };
+
+                var request = new
+                {
+                    jsonrpc = "2.0",
+                    id = GetNextId(),
+                    method = "initialize",
+                    @params = new
+                    {
+                        protocolVersion = "0.1.0",
+                        clientInfo = new  // Added this object
+                        {
+                            name = "semantic-kernel-client",
+                            version = "1.0.0"
+                        },
+                        capabilities = new
+                        {
+                            tools = new { }
+                        }
+                    }
+                };
+
+                // Use a shorter timeout for just the initialization
+                using var initCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                initCts.CancelAfter(TimeSpan.FromSeconds(10)); // 10 second timeout for init
+                
+                _logger?.LogInformation("Sending initialize request to MCP server");
+                try
+                {
+                    var response = await SendRequestAsync(request, initCts.Token);
+                    _logger?.LogInformation("Received initialize response from MCP server");
+                    
+                    // Send initialized notification
+                    var notification = new
+                    {
+                        jsonrpc = "2.0",
+                        method = "initialized"
+                    };
+
+                    await SendNotificationAsync(notification, cancellationToken);
+                    _initialized = true;
+                    _logger?.LogInformation("MCP server successfully initialized");
+                }
+                catch (OperationCanceledException) when (initCts.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+                {
+                    // This was our timeout, not the user's cancellation
+                    throw new TimeoutException("MCP server initialization timed out after 10 seconds. Check if the server is running and responding.");
+                }
+            }
+            catch (Exception ex) when (!(ex is OperationCanceledException && cancellationToken.IsCancellationRequested))
+            {
+                // If this is not a normal cancellation, add diagnostic info
+                string processState = _process.HasExited 
+                    ? $"Process exited with code {_process.ExitCode}" 
+                    : "Process is still running";
+                
+                string errorOutput = "";
+                try
+                {
+                    // Try to get any error output
+                    errorOutput = _process.StandardError.ReadToEnd();
+                }
+                catch
+                {
+                    errorOutput = "Could not read error output";
+                }
+                
+                _logger?.LogError("MCP initialization failed: {Error}\nProcess state: {State}\nError output: {Output}", 
+                    ex.Message, processState, errorOutput);
+                
+                throw new InvalidOperationException($"Failed to initialize MCP connection: {ex.Message}", ex);
+            }
         }
 
         /// <summary>
@@ -455,6 +527,26 @@ namespace McpSemanticKernel
 
                     await SendNotificationAsync(notification, CancellationToken.None);
                 }
+                catch (InvalidOperationException ex ) when (ex.Message.Contains("Method not found"))
+                {
+                    // Ignore this error - the server doesn't support the shutdown method
+                    _logger?.LogWarning("Server doesn't support shutdown method, continuing with exit");
+                    try
+                    {
+                        var notification = new
+                        {
+                            jsonrpc = "2.0",
+                            method = "exit"
+                        };
+
+                        await SendNotificationAsync(notification, CancellationToken.None);
+                    }
+                    catch (Exception exitEx)
+                    {
+                        _logger?.LogWarning("Error sending exit notification: {Error}", exitEx.Message);
+                    }
+                    
+                }
                 catch (Exception ex)
                 {
                     _logger?.LogError(ex, "Error during MCP connection shutdown");
@@ -481,17 +573,25 @@ namespace McpSemanticKernel
 
             try
             {
-                using var streamReader = new StreamReader(_process.StandardOutput.BaseStream, Encoding.UTF8);
+                _logger?.LogInformation("Starting MCP message listener");
                 
+                // Setup stderr handling first to capture any early errors
+                var errorBuilder = new StringBuilder();
                 _process.ErrorDataReceived += (sender, args) => 
                 {
                     if (!string.IsNullOrEmpty(args.Data))
                     {
+                        errorBuilder.AppendLine(args.Data);
                         _logger?.LogWarning("MCP Server Error: {ErrorMessage}", args.Data);
                     }
                 };
                 
                 _process.BeginErrorReadLine();
+                
+                // Setup stdout handling
+                using var streamReader = new StreamReader(_process.StandardOutput.BaseStream, Encoding.UTF8);
+                
+                _logger?.LogInformation("MCP listener started - waiting for messages from server");
 
                 string line;
                 while ((line = await streamReader.ReadLineAsync(cancellationToken)) != null)
@@ -514,32 +614,53 @@ namespace McpSemanticKernel
                             var id = idElement.GetString();
                             if (!string.IsNullOrEmpty(id) && _pendingRequests.TryGetValue(id, out var tcs))
                             {
+                                _logger?.LogDebug("Processing response for request ID: {Id}", id);
+                                
                                 if (root.TryGetProperty("result", out var resultElement))
                                 {
+                                    _logger?.LogDebug("Request {Id} completed successfully", id);
                                     tcs.SetResult(resultElement);
                                 }
                                 else if (root.TryGetProperty("error", out var errorElement))
                                 {
+                                    var errorCode = errorElement.TryGetProperty("code", out var codeElement)
+                                        ? codeElement.GetInt32()
+                                        : -1;
+                                        
                                     var errorMessage = errorElement.TryGetProperty("message", out var messageElement)
                                         ? messageElement.GetString()
                                         : "Unknown error";
                                     
-                                    tcs.SetException(new InvalidOperationException($"MCP error: {errorMessage}"));
+                                    _logger?.LogError("Request {Id} failed with error code {Code}: {Message}", 
+                                        id, errorCode, errorMessage);
+                                    
+                                    tcs.SetException(new InvalidOperationException($"MCP error {errorCode}: {errorMessage}"));
                                 }
                                 else
                                 {
+                                    _logger?.LogError("Request {Id} received malformed response (missing result and error)", id);
                                     tcs.SetException(new InvalidOperationException("Malformed MCP response: neither result nor error present"));
                                 }
 
                                 _pendingRequests.Remove(id);
+                            }
+                            else if (!string.IsNullOrEmpty(id))
+                            {
+                                _logger?.LogWarning("Received response for unknown request ID: {Id}", id);
                             }
                         }
                         // Handle notifications (no id)
                         else if (root.TryGetProperty("method", out var methodElement))
                         {
                             var method = methodElement.GetString();
-                            // Handle various notification types if needed
                             _logger?.LogDebug("Received notification: {Method}", method);
+                            
+                            // Handle different notification types if needed
+                            // Currently we don't do anything specific with notifications
+                        }
+                        else
+                        {
+                            _logger?.LogWarning("Received message with neither id nor method: {Message}", line);
                         }
                     }
                     catch (JsonException ex)
@@ -551,6 +672,26 @@ namespace McpSemanticKernel
                         _logger?.LogError(ex, "Error processing message from MCP server: {Message}", line);
                     }
                 }
+                
+                _logger?.LogInformation("MCP server stdout stream ended");
+                
+                // If we've reached here, the process output has ended
+                // Check if there were any errors
+                if (errorBuilder.Length > 0)
+                {
+                    _logger?.LogError("MCP server had error output: {Errors}", errorBuilder.ToString());
+                }
+                
+                // Check if the process is still running
+                if (!_process.HasExited)
+                {
+                    _logger?.LogWarning("MCP server stdout ended but process is still running");
+                }
+                else
+                {
+                    _logger?.LogInformation("MCP server process has exited with code: {ExitCode}", 
+                        _process.ExitCode);
+                }
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
@@ -559,6 +700,13 @@ namespace McpSemanticKernel
             catch (Exception ex)
             {
                 _logger?.LogError(ex, "Error in MCP message listening loop");
+                
+                // Cancel any pending requests
+                foreach (var (id, tcs) in _pendingRequests)
+                {
+                    tcs.TrySetException(new InvalidOperationException("MCP listener encountered an error", ex));
+                }
+                _pendingRequests.Clear();
             }
         }
 
@@ -600,25 +748,53 @@ namespace McpSemanticKernel
 
             var jsonRequest = JsonSerializer.Serialize(request);
             var id = GetIdFromRequest(jsonRequest);
+            var methodName = GetMethodFromRequest(jsonRequest);
+
+            _logger?.LogDebug("Preparing to send request: {Method} (id: {Id})", methodName, id);
 
             var tcs = new TaskCompletionSource<JsonElement>();
             _pendingRequests[id] = tcs;
 
             try
             {
+                // Send the request
                 await SendMessageAsync(jsonRequest, cancellationToken);
+                _logger?.LogDebug("Request sent: {Method} (id: {Id})", methodName, id);
+                
+                // Create a timeout
                 using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
                 cts.CancelAfter(TimeSpan.FromSeconds(30)); // Add timeout
                 
                 using var registration = cts.Token.Register(() => 
-                    tcs.TrySetException(new TimeoutException($"Request {id} timed out")));
+                {
+                    var message = $"Request {methodName} (id: {id}) timed out after 30 seconds";
+                    _logger?.LogWarning(message);
+                    tcs.TrySetException(new TimeoutException(message));
+                });
                 
-                return await tcs.Task;
+                _logger?.LogDebug("Waiting for response to: {Method} (id: {Id})", methodName, id);
+                var result = await tcs.Task;
+                _logger?.LogDebug("Received response for: {Method} (id: {Id})", methodName, id);
+                return result;
+            }
+            catch (Exception ex)
+            {
+                _logger?.LogError(ex, "Error in request {Method} (id: {Id}): {Message}", methodName, id, ex.Message);
+                _pendingRequests.Remove(id);
+                throw;
+            }
+        }
+        
+        private string GetMethodFromRequest(string jsonRequest)
+        {
+            try
+            {
+                var document = JsonDocument.Parse(jsonRequest);
+                return document.RootElement.GetProperty("method").GetString() ?? "unknown";
             }
             catch
             {
-                _pendingRequests.Remove(id);
-                throw;
+                return "unknown";
             }
         }
 

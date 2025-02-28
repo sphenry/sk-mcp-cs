@@ -5,9 +5,11 @@ Simple MCP Calculator Server
 This server exposes mathematical operations as MCP tools.
 """
 from mcp.server.fastmcp import FastMCP, Context
+import logging
+logging.basicConfig(level=logging.DEBUG)
 
 # Create our MCP server
-mcp = FastMCP("Calculator")
+mcp = FastMCP("Calculator", debug=True)
 
 @mcp.tool()
 def add(a: float, b: float) -> float:

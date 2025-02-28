@@ -35,14 +35,11 @@ namespace McpSemanticKernelExample
                 // Connect to one or more MCP servers
                 // Example: Connect to a weather server
                 await mcpClient.ConnectToServerAsync(
-                    serverName: "calculator", 
-                    command: "python", 
+                    serverName: "weather", 
+                    command: "node", 
                     //arguments: new[] { "-y", "@modelcontextprotocol/server-weather" },
-                    arguments: new[] {"C:\\src\\sk-mcp-cs\\calculator_server.py"},
-                    environmentVariables: new Dictionary<string, string>
-                    {
-                        ["WEATHER_API_KEY"] = Environment.GetEnvironmentVariable("WEATHER_API_KEY")
-                    });
+                    arguments: new[] { "C:\\src\\sk-mcp-cs\\mcp-calculator\\weather_server.js"}
+                );
                 
                 logger.LogInformation("Connected to MCP servers: {Servers}", 
                     string.Join(", ", mcpClient.GetConnectedServers()));
@@ -58,11 +55,13 @@ namespace McpSemanticKernelExample
                 var kernel = builder.Build();
 
                 // Register MCP tools as a Semantic Kernel plugin
-                await mcpClient.RegisterToolsAsPluginAsync(kernel, "calculator", "CalculatorTools");
+                await mcpClient.RegisterToolsAsPluginAsync(kernel, "weather", "WeatherTools");
 
                 // Use the tools with Semantic Kernel's AI
                 var result = await kernel.InvokePromptAsync(
-                    "What is 2 + 2?");
+                    "Weather in Tokyo today?", new KernelArguments(new PromptExecutionSettings() { 
+                         FunctionChoiceBehavior = FunctionChoiceBehavior.Auto() 
+                    }));
                 
                 Console.WriteLine("AI Response:");
                 Console.WriteLine(result);
@@ -87,16 +86,16 @@ namespace McpSemanticKernelExample
 
         static async Task ExampleDirectToolUse(Kernel kernel)
         {
-            Console.WriteLine("\nDirect Tool Use Example:");
+            // Console.WriteLine("\nDirect Tool Use Example:");
             
-            // Get the weather function from the registered plugin
-            var getCurrentWeather = kernel.Plugins["WeatherTools"]["GetCurrentWeather"];
+            // // Get the weather function from the registered plugin
+            // var getCurrentWeather = kernel.Plugins["WeatherTools"]["GetCurrentWeather"];
             
-            // Call the function directly
-            var weatherResult = await kernel.InvokeAsync(getCurrentWeather, 
-                new KernelArguments { ["location"] = "New York" });
+            // // Call the function directly
+            // var weatherResult = await kernel.InvokeAsync(getCurrentWeather, 
+            //     new KernelArguments { ["location"] = "New York" });
             
-            Console.WriteLine($"Current weather in New York: {weatherResult}");
+            // Console.WriteLine($"Current weather in New York: {weatherResult}");
         }
         
         // static async Task ExampleCreatePlanWithMcpTools(Kernel kernel)
