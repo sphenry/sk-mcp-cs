@@ -1000,6 +1000,8 @@ namespace McpSemanticKernel
             [Description("JSON string containing tool arguments")] string arguments,
             CancellationToken cancellationToken = default)
         {
+            if(toolName == "filesystem")//TODO: HACK for filesystem demo
+                arguments = arguments.Replace('\\', '/');
             var toolArgs = JsonSerializer.Deserialize<Dictionary<string, object>>(arguments);
             return await _connection.CallToolAsync(toolName, toolArgs, cancellationToken);
         }

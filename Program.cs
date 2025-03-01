@@ -37,8 +37,13 @@ namespace McpSemanticKernelExample
                 await mcpClient.ConnectToServerAsync(
                     serverName: "weather", 
                     command: "node", 
-                    //arguments: new[] { "-y", "@modelcontextprotocol/server-weather" },
                     arguments: new[] { "C:\\src\\sk-mcp-cs\\mcp-calculator\\weather_server.js"}
+                );
+
+                await mcpClient.ConnectToServerAsync(
+                    serverName: "filesystem", 
+                    command: "node", 
+                    arguments: new[] { "C:\\src\\servers\\src\\filesystem\\dist\\index.js", "C:\\src\\temp"}
                 );
                 
                 logger.LogInformation("Connected to MCP servers: {Servers}", 
@@ -56,10 +61,10 @@ namespace McpSemanticKernelExample
 
                 // Register MCP tools as a Semantic Kernel plugin
                 await mcpClient.RegisterToolsAsPluginAsync(kernel, "weather", "WeatherTools");
+                await mcpClient.RegisterToolsAsPluginAsync(kernel, "filesystem", "FileSystemTools");
 
-                // Use the tools with Semantic Kernel's AI
                 var result = await kernel.InvokePromptAsync(
-                    "Weather in Tokyo today?", new KernelArguments(new PromptExecutionSettings() { 
+                    "put the weather report for New York, Tokyo and Paris in files in a weather_report directory", new KernelArguments(new PromptExecutionSettings() { 
                          FunctionChoiceBehavior = FunctionChoiceBehavior.Auto() 
                     }));
                 
