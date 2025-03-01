@@ -179,33 +179,43 @@ static async Task ConnectToServersFromConfig(
             {
                 try
                 {
-                    string command = config["command"].ToString();
-                   // if(command == "npx") command = @"C:\Program Files\nodejs\npx.cmd";
-                    string[] args = JsonSerializer.Deserialize<string[]>(
-                        JsonSerializer.Serialize(config["args"]));
+                    string command = config["command"]?.ToString() ?? string.Empty;
+                    if(command == "npx") command = @"C:\Program Files\nodejs\npx.cmd";  //TODO for some reason npx is not in PATH
+                    string argString = JsonSerializer.Serialize(config["args"] ?? string.Empty) ?? string.Empty;
                     
-                    Dictionary<string, string> env = null;
+                    string[]? args = JsonSerializer.Deserialize<string[]>(argString);
+                    
+                    Dictionary<string, string> env = new Dictionary<string, string>();
                     if (config.TryGetValue("env", out var envObj) && envObj != null)
                     {
                         env = new Dictionary<string, string>();
                         var envDict = JsonSerializer.Deserialize<Dictionary<string, object>>(
                             JsonSerializer.Serialize(envObj));
-                            
-                        foreach (var (key, value) in envDict)
+                        if(envDict != null)
                         {
-                            // Handle environment variable substitution
-                            string strValue = value.ToString();
-                            if (strValue.StartsWith("$"))
+                            foreach (var (key, value) in envDict)
                             {
-                                // Remove $ and get from environment
-                                string envVarName = strValue.Substring(1);
-                                strValue = Environment.GetEnvironmentVariable(envVarName) ?? "";
+                                // Handle environment variable substitution
+                                string strValue = value?.ToString() ?? string.Empty;
+                                if (strValue.StartsWith("$"))
+                                {
+                                    // Remove $ and get from environment
+                                    string envVarName = strValue.Substring(1);
+                                    strValue = Environment.GetEnvironmentVariable(envVarName) ?? "";
+                                }
+                                env[key] = strValue;
                             }
-                            env[key] = strValue;
                         }
                     }
 
-                    await mcpClient.ConnectToServerAsync(serverName, command, args, env);
+                    if (command != null)
+                    {
+                        await mcpClient.ConnectToServerAsync(serverName, command, args, env);
+                    }
+                    else
+                    {
+                        logger.LogError("Command is null for server: {ServerName}", serverName);
+                    }
                     logger.LogInformation("Connected to MCP server: {ServerName}", serverName);
                 }
                 catch (Exception ex)
@@ -214,7 +224,7 @@ static async Task ConnectToServersFromConfig(
                 }
             }
         }
-        static Dictionary<string, Dictionary<string, object>> LoadConfiguration(string filePath)
+        static Dictionary<string, Dictionary<string, object>>? LoadConfiguration(string filePath)
         {
             try
             {
@@ -228,7 +238,7 @@ static async Task ConnectToServersFromConfig(
                 var config = JsonSerializer.Deserialize<Dictionary<string, Dictionary<string, Dictionary<string, object>>>>(
                     jsonString);
                 
-                return config["mcpServers"];
+                return config?["mcpServers"];
             }
             catch (Exception ex)
             {

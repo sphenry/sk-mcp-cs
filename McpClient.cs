@@ -11,13 +11,6 @@ using Microsoft.Extensions.Logging;
 using Microsoft.SemanticKernel;
 using Microsoft.SemanticKernel.Plugins.Core;
 using System.ComponentModel;
-#pragma warning disable CS8625 // Cannot convert null literal to non-nullable reference type.
-#pragma warning disable CS8604 // Possible null reference argument.
-#pragma warning disable CS8601 // Possible null reference assignment.
-#pragma warning disable CS8600 // Converting null literal or possible null value to non-nullable type.
-#pragma warning disable CS8603 // Possible null reference return.
-#pragma warning disable CS8619 // Nullability of reference types in value doesn't match target type.
-#pragma warning disable CS8618 // Non-nullable field must contain a non-null value when exiting constructor. Consider adding the 'required' modifier or declaring as nullable.
 
 
 
@@ -38,9 +31,9 @@ namespace McpSemanticKernel
         /// Initializes a new instance of the <see cref="McpClient"/> class.
         /// </summary>
         /// <param name="logger">Logger for the MCP client.</param>
-        public McpClient(ILogger<McpClient> logger = null)
+        public McpClient(ILogger<McpClient>? logger = null)
         {
-            _logger = logger;
+            _logger = logger ?? LoggerFactory.Create(builder => builder.AddConsole()).CreateLogger<McpClient>();
         }
 
         /// <summary>
@@ -56,7 +49,7 @@ namespace McpSemanticKernel
             string serverName,
             string command,
             string[] arguments,
-            Dictionary<string, string> environmentVariables = null,
+            Dictionary<string, string>? environmentVariables = null,
             CancellationToken cancellationToken = default)
         {
             ThrowIfDisposed();
@@ -107,7 +100,7 @@ namespace McpSemanticKernel
 
             _serverProcesses[serverName] = process;
 
-            var connection = new McpServerConnection(process, _logger);
+            var connection = new McpServerConnection(process, _logger ?? throw new ArgumentNullException(nameof(_logger)));
             _connections[serverName] = connection;
 
             // Start listening for messages
@@ -179,7 +172,7 @@ namespace McpSemanticKernel
         public async Task<object> RegisterToolsAsPluginAsync(
             Kernel kernel,
             string serverName,
-            string pluginName = null,
+            string? pluginName = null,
             CancellationToken cancellationToken = default)
         {
             ThrowIfDisposed();
@@ -204,7 +197,7 @@ namespace McpSemanticKernel
             _logger?.LogInformation("Found {ToolCount} tools on server '{ServerName}'", tools.Count, serverName);
 
             // Create a dynamic plugin object
-            var pluginInstance = new McpPlugin(connection, tools, _logger);
+            var pluginInstance = new McpPlugin(connection, tools, _logger ?? throw new ArgumentNullException(nameof(_logger)));
             
             // Register with Semantic Kernel
             kernel.Plugins.AddFromObject(pluginInstance, pluginName);
@@ -223,7 +216,7 @@ namespace McpSemanticKernel
         /// <returns>A task representing the asynchronous operation with the resource content.</returns>
         public async Task<byte[]> ReadResourceAsync(
             string uri,
-            string serverName = null,
+            string? serverName = null,
             CancellationToken cancellationToken = default)
         {
             ThrowIfDisposed();
@@ -258,7 +251,7 @@ namespace McpSemanticKernel
         public async Task SaveScreenshotToFileAsync(
             string screenshotName,
             string filePath,
-            string serverName = null,
+            string? serverName = null,
             CancellationToken cancellationToken = default)
         {
             var screenshotUri = $"screenshot://{screenshotName}";
@@ -498,15 +491,23 @@ namespace McpSemanticKernel
                 // Check if there's text content
                 if (content.TryGetProperty("text", out var textElement))
                 {
-                    string text = textElement.GetString();
-                    return Encoding.UTF8.GetBytes(text);
+                    string text = textElement.GetString() ?? string.Empty;
+                    if (text != null)
+                    {
+                        return Encoding.UTF8.GetBytes(text);
+                    }
+                    throw new InvalidOperationException($"Resource '{uri}' has no readable text content");
                 }
                 
                 // Check if there's blob content (base64-encoded binary data)
                 if (content.TryGetProperty("blob", out var blobElement))
                 {
-                    string base64Data = blobElement.GetString();
-                    return Convert.FromBase64String(base64Data);
+                    string? base64Data = blobElement.GetString();
+                    if (!string.IsNullOrEmpty(base64Data))
+                    {
+                        return Convert.FromBase64String(base64Data);
+                    }
+                    throw new InvalidOperationException($"Resource '{uri}' has no readable blob content");
                 }
             }
             
@@ -549,8 +550,8 @@ namespace McpSemanticKernel
 
                 var mcpTool = new McpTool
                 {
-                    Name = name,
-                    Description = description,
+                    Name = name ?? throw new InvalidOperationException("Tool name cannot be null"),
+                    Description = description ?? string.Empty,
                     InputSchema = inputSchema
                 };
 
@@ -709,7 +710,7 @@ namespace McpSemanticKernel
                 
                 _logger?.LogInformation("MCP listener started - waiting for messages from server");
 
-                string line;
+                string? line;
                 while ((line = await streamReader.ReadLineAsync(cancellationToken)) != null)
                 {
                     if (string.IsNullOrWhiteSpace(line))
@@ -943,7 +944,7 @@ namespace McpSemanticKernel
             try
             {
                 var document = JsonDocument.Parse(jsonRequest);
-                return document.RootElement.GetProperty("id").GetString();
+                return document.RootElement.GetProperty("id").GetString() ?? string.Empty;
             }
             catch
             {
@@ -981,12 +982,12 @@ namespace McpSemanticKernel
         /// <summary>
         /// Gets or sets the name of the tool.
         /// </summary>
-        public string Name { get; set; }
+        public required string Name { get; set; }
 
         /// <summary>
         /// Gets or sets the description of the tool.
         /// </summary>
-        public string Description { get; set; }
+        public required string Description { get; set; }
 
         /// <summary>
         /// Gets or sets the input schema for the tool.
@@ -1004,7 +1005,7 @@ namespace McpSemanticKernel
             if (InputSchema.TryGetProperty("properties", out var properties))
             {
                 var requiredParams = InputSchema.TryGetProperty("required", out var required)
-                    ? required.EnumerateArray().Select(r => r.GetString()).ToHashSet()
+                    ? required.EnumerateArray().Select(r => r.GetString()).Where(s => s != null).ToHashSet()!
                     : new HashSet<string>();
 
                 foreach (var property in properties.EnumerateObject())
@@ -1022,8 +1023,8 @@ namespace McpSemanticKernel
                     parameters.Add(new ParameterDefinition
                     {
                         Name = paramName,
-                        Type = type,
-                        Description = description,
+                        Type = type ?? "string",
+                        Description = description ?? string.Empty,
                         IsRequired = isRequired
                     });
                 }
@@ -1041,17 +1042,17 @@ namespace McpSemanticKernel
         /// <summary>
         /// Gets or sets the name of the parameter.
         /// </summary>
-        public string Name { get; set; }
+        public required string Name { get; set; }
 
         /// <summary>
         /// Gets or sets the type of the parameter.
         /// </summary>
-        public string Type { get; set; }
+        public required string Type { get; set; }
 
         /// <summary>
         /// Gets or sets the description of the parameter.
         /// </summary>
-        public string Description { get; set; }
+        public required string Description { get; set; }
 
         /// <summary>
         /// Gets or sets a value indicating whether the parameter is required.
@@ -1119,6 +1120,10 @@ namespace McpSemanticKernel
             if(toolName == "filesystem")//TODO: HACK for filesystem demo
                 arguments = arguments.Replace('\\', '/');
             var toolArgs = JsonSerializer.Deserialize<Dictionary<string, object>>(arguments);
+            if (toolArgs == null)
+            {
+                throw new ArgumentNullException(nameof(arguments), "Tool arguments cannot be null");
+            }
             return await _connection.CallToolAsync(toolName, toolArgs, cancellationToken);
         }
 
