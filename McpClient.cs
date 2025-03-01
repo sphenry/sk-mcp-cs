@@ -192,6 +192,13 @@ namespace McpSemanticKernel
             // Use the server name as the plugin name if not specified
             pluginName ??= serverName;
 
+            //A plugin name can contain only ASCII letters, digits, and underscores
+            if (!pluginName.All(c => char.IsLetterOrDigit(c) || c == '_'))
+            {
+                //fix it
+                pluginName = new string(pluginName.Where(c => char.IsLetterOrDigit(c) || c == '_').ToArray());
+            }
+
             // Get available tools from the server
             var tools = await connection.ListToolsAsync(cancellationToken);
             _logger?.LogInformation("Found {ToolCount} tools on server '{ServerName}'", tools.Count, serverName);
@@ -205,6 +212,67 @@ namespace McpSemanticKernel
             _logger?.LogInformation("Registered MCP server '{ServerName}' as plugin '{PluginName}'", serverName, pluginName);
             
             return pluginInstance;
+        }
+
+        /// <summary>
+        /// Reads a resource from the MCP server.
+        /// </summary>
+        /// <param name="uri">The URI of the resource to read.</param>
+        /// <param name="serverName">Optional server name if you have multiple connections.</param>
+        /// <param name="cancellationToken">Cancellation token.</param>
+        /// <returns>A task representing the asynchronous operation with the resource content.</returns>
+        public async Task<byte[]> ReadResourceAsync(
+            string uri,
+            string serverName = null,
+            CancellationToken cancellationToken = default)
+        {
+            ThrowIfDisposed();
+
+            // If no server name specified, use the first one
+            if (string.IsNullOrEmpty(serverName))
+            {
+                var servers = GetConnectedServers();
+                if (servers.Count == 0)
+                {
+                    throw new InvalidOperationException("No connected MCP servers available.");
+                }
+                serverName = servers[0];
+            }
+
+            if (!_connections.TryGetValue(serverName, out var connection))
+            {
+                throw new InvalidOperationException($"No connection to server '{serverName}' exists.");
+            }
+
+            return await connection.ReadResourceAsync(uri, cancellationToken);
+        }
+
+        /// <summary>
+        /// Saves a screenshot from the MCP server to a file.
+        /// </summary>
+        /// <param name="screenshotName">The name of the screenshot.</param>
+        /// <param name="filePath">The file path where to save the screenshot.</param>
+        /// <param name="serverName">Optional server name if you have multiple connections.</param>
+        /// <param name="cancellationToken">Cancellation token.</param>
+        /// <returns>A task representing the asynchronous operation.</returns>
+        public async Task SaveScreenshotToFileAsync(
+            string screenshotName,
+            string filePath,
+            string serverName = null,
+            CancellationToken cancellationToken = default)
+        {
+            var screenshotUri = $"screenshot://{screenshotName}";
+            var data = await ReadResourceAsync(screenshotUri, serverName, cancellationToken);
+            
+            // Ensure directory exists
+            var directory = Path.GetDirectoryName(filePath);
+            if (!string.IsNullOrEmpty(directory) && !Directory.Exists(directory))
+            {
+                Directory.CreateDirectory(directory);
+            }
+            
+            await File.WriteAllBytesAsync(filePath, data, cancellationToken);
+            _logger?.LogInformation("Screenshot saved to {FilePath}", filePath);
         }
 
         /// <summary>
@@ -397,6 +465,54 @@ namespace McpSemanticKernel
                 throw new InvalidOperationException($"Failed to initialize MCP connection: {ex.Message}", ex);
             }
         }
+        /// <summary>
+        /// Reads a resource from the MCP server.
+        /// </summary>
+        /// <param name="uri">The URI of the resource to read.</param>
+        /// <param name="cancellationToken">Cancellation token.</param>
+        /// <returns>The resource content as a byte array.</returns>
+        public async Task<byte[]> ReadResourceAsync(
+            string uri,
+            CancellationToken cancellationToken = default)
+        {
+            ThrowIfDisposed();
+            EnsureInitialized();
+
+            var request = new
+            {
+                jsonrpc = "2.0",
+                id = GetNextId(),
+                method = "resources/read",
+                @params = new
+                {
+                    uri = uri
+                }
+            };
+
+            var response = await SendRequestAsync(request, cancellationToken);
+            
+            if (response.TryGetProperty("contents", out var contentsArray) && contentsArray.GetArrayLength() > 0)
+            {
+                var content = contentsArray[0];
+                
+                // Check if there's text content
+                if (content.TryGetProperty("text", out var textElement))
+                {
+                    string text = textElement.GetString();
+                    return Encoding.UTF8.GetBytes(text);
+                }
+                
+                // Check if there's blob content (base64-encoded binary data)
+                if (content.TryGetProperty("blob", out var blobElement))
+                {
+                    string base64Data = blobElement.GetString();
+                    return Convert.FromBase64String(base64Data);
+                }
+            }
+            
+            throw new InvalidOperationException($"Resource '{uri}' has no readable content");
+        }
+        
 
         /// <summary>
         /// Lists the tools available on the connected MCP server.
