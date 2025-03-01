@@ -10,7 +10,7 @@
 | [Fetch](src/fetch) | ❌ Failed (times out, maybe not handling notifications) |
 | [Filesystem](src/filesystem) | ✅ Tested |
 | [Git](src/git) | Unknown |
-| [GitHub](src/github) | Unknown |
+| [GitHub](src/github) | ✅ Tested |
 | [Google Maps](src/google-maps) | Unknown |
 | [Memory](src/memory) | Unknown |
 | [Puppeteer](src/puppeteer) | ✅ Tested |

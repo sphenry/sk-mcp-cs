@@ -57,11 +57,31 @@ namespace McpSemanticKernelExample
                 foreach (var serverName in mcpClient.GetConnectedServers())
                 {
                     // The plugin name in Semantic Kernel will be the same as the server name
+                    logger.LogInformation("Registering {ServerName} tools as plugin", serverName);
                     await mcpClient.RegisterToolsAsPluginAsync(kernel, serverName);
-                    logger.LogInformation("Registered {ServerName} tools as plugin", serverName);
+                }
+
+                // List tools for each registered plugin
+                foreach (KernelPlugin plugin in kernel.Plugins)
+                {
+                    var serverName = plugin.Name;
+                    plugin.TryGetFunction("ListTools", out var getToolsFunction);
+                    if (getToolsFunction != null)
+                    {
+                        var toolsResult = await kernel.InvokeAsync(getToolsFunction);
+                        logger.LogInformation("Tools for {ServerName}:", serverName);
+                            logger.LogInformation("- {ToolName}", toolsResult);
+                    }
                 }
 
                 var prompts = new [] {
+                    "What is the weather in Seattle?",
+                    "What is the weather in Miami?",
+                    "Research modern JavaScript frameworks using Brave Search, focusing on performance metrics and community support. Then find the top 3 repositories for each framework on GitHub, analyze their documentation, stars, and recent commit activity. Save this research as a structured markdown document to my filesystem. Finally, use Google Maps to identify tech hubs where these frameworks are being actively developed, such as San Francisco, New York, and Seattle.",
+                    "Check the weather forecast for Miami and San Francisco for the next 3 days. Then use Google Maps to find the distance between them and calculate a road trip route. Use Puppeteer to visit Airbnb.com and search for accommodations in the city with better weather. Take a screenshot of the results and save it to my filesystem.",
+                    "What is the lat lon of 1 Microsoft Way, Redmond, WA?",
+                    "Generate a summary of the last 3 commits to https://github.com/sphenry/sk-mcp-cs",
+                    "Visit spotify.com and test their signup flow by filling out the registration form (but don't submit it). Take screenshots at each step.",
                     "put the weather report for New York, Tokyo and Paris in files in a weather_report directory",
                     "Go to bing.com, search for the weather in San Francisco, and save a screenshot of the forecast.",
                     "Go to weather.gov, search for the weather in San Francisco, and save a screenshot of the forecast."
@@ -87,13 +107,6 @@ namespace McpSemanticKernelExample
                 );
 
                 Console.WriteLine($"Screenshot saved to: {screenshotPath}");
-
-
-
-                // var result = await kernel.InvokePromptAsync(
-                // "put the weather report for New York, Tokyo and Paris in files in a weather_report directory", new KernelArguments(new PromptExecutionSettings() { 
-                //         FunctionChoiceBehavior = FunctionChoiceBehavior.Auto() 
-                // }));
 
                 foreach (var server in mcpClient.GetConnectedServers())
                 {
@@ -167,7 +180,7 @@ static async Task ConnectToServersFromConfig(
                 try
                 {
                     string command = config["command"].ToString();
-                    if(command == "npx") command = @"C:\Program Files\nodejs\npx.cmd";
+                   // if(command == "npx") command = @"C:\Program Files\nodejs\npx.cmd";
                     string[] args = JsonSerializer.Deserialize<string[]>(
                         JsonSerializer.Serialize(config["args"]));
                     
